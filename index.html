@@ -1,6 +1,82 @@
 <html>
   <head>
     <script src="https://aframe.io/releases/1.8.0/aframe.min.js"></script>
+    <script>
+      AFRAME.registerComponent('mesh-collision', {
+        schema: {
+          target: { type: 'selector' },
+          radius: { default: 0.35 }
+        },
+        init: function () {
+          this.meshBounds = [];
+          this.lastSafePosition = this.el.object3D.position.clone();
+          this.onModelLoaded = this.onModelLoaded.bind(this);
+          this.data.target.addEventListener('model-loaded', this.onModelLoaded);
+          if (this.data.target.getObject3D('mesh')) this.onModelLoaded();
+        },
+        onModelLoaded: function () {
+          const model = this.data.target.getObject3D('mesh');
+          this.meshBounds = [];
+          model.updateMatrixWorld(true);
+          model.traverse(object => {
+            if (!object.isMesh || !object.geometry) return;
+            const bounds = new THREE.Box3().setFromObject(object);
+            const size = bounds.getSize(new THREE.Vector3());
+            const isEnclosingShell = size.x > 12 && size.z > 25;
+            if (!isEnclosingShell) this.meshBounds.push(bounds);
+          });
+        },
+        intersectsMesh: function (position) {
+          const radius = this.data.radius;
+          return this.meshBounds.some(bounds =>
+            position.x + radius > bounds.min.x && position.x - radius < bounds.max.x &&
+            position.y + radius > bounds.min.y && position.y - radius < bounds.max.y &&
+            position.z + radius > bounds.min.z && position.z - radius < bounds.max.z
+          );
+        },
+        tick: function () {
+          const position = this.el.object3D.position;
+          const previous = this.lastSafePosition;
+
+          if (this.intersectsMesh(position)) position.x = previous.x;
+
+          if (this.intersectsMesh(position)) position.z = previous.z;
+
+          if (this.intersectsMesh(position)) position.y = previous.y;
+
+          this.lastSafePosition.copy(position);
+        },
+        remove: function () {
+          this.data.target.removeEventListener('model-loaded', this.onModelLoaded);
+        }
+      });
+
+      AFRAME.registerComponent('vertical-controls', {
+        schema: { speed: { default: 3 } },
+        init: function () {
+          this.keys = {};
+          this.onKeyDown = event => {
+            if (['Space', 'ShiftLeft', 'ShiftRight', 'ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'KeyR', 'KeyF'].includes(event.code)) {
+              event.preventDefault();
+              this.keys[event.code] = true;
+            }
+          };
+          this.onKeyUp = event => { this.keys[event.code] = false; };
+          window.addEventListener('keydown', this.onKeyDown);
+          window.addEventListener('keyup', this.onKeyUp);
+        },
+        tick: function (time, delta) {
+          const up = this.keys.Space || this.keys.ArrowUp || this.keys.PageUp || this.keys.KeyE || this.keys.KeyR;
+          const down = this.keys.ShiftLeft || this.keys.ShiftRight || this.keys.ArrowDown || this.keys.PageDown || this.keys.KeyQ || this.keys.KeyF;
+          const direction = (up ? 1 : 0) - (down ? 1 : 0);
+          this.el.object3D.position.y += direction * this.data.speed * delta / 1000;
+        },
+        remove: function () {
+          window.removeEventListener('keydown', this.onKeyDown);
+          window.removeEventListener('keyup', this.onKeyUp);
+        }
+      });
+    </script>
   </head>
   <body>
 <a-scene>
@@ -8,7 +84,10 @@
     <a-asset-item id="tree" src="gaetanProject2.glb"></a-asset-item>
   </a-assets>
 
-  <a-entity gltf-model="#tree"></a-entity>
+  <a-entity id="hallway" gltf-model="#tree"></a-entity>
+  <a-entity id="player" position="0 1.6 0" wasd-controls vertical-controls mesh-collision="target: #hallway">
+    <a-entity camera position="0 0 0" look-controls></a-entity>
+  </a-entity>
 </a-scene>
 
 </body>
