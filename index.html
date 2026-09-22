@@ -55,8 +55,9 @@
         schema: { speed: { default: 3 } },
         init: function () {
           this.keys = {};
+          this.outerBounds = null;
           this.onKeyDown = event => {
-            if (['Space', 'ShiftLeft', 'ShiftRight', 'ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'KeyR', 'KeyF'].includes(event.code)) {
+            if (['ShiftLeft', 'ShiftRight', 'ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'KeyR', 'KeyF'].includes(event.code)) {
               event.preventDefault();
               this.keys[event.code] = true;
             }
@@ -64,12 +65,119 @@
           this.onKeyUp = event => { this.keys[event.code] = false; };
           window.addEventListener('keydown', this.onKeyDown);
           window.addEventListener('keyup', this.onKeyUp);
+
+          const hallway = document.getElementById('hallway');
+          if (hallway) {
+            hallway.addEventListener('model-loaded', () => {
+              const model = hallway.getObject3D('mesh');
+              if (!model) return;
+              model.updateMatrixWorld(true);
+              this.outerBounds = new THREE.Box3().setFromObject(model);
+            });
+          }
         },
         tick: function (time, delta) {
-          const up = this.keys.Space || this.keys.ArrowUp || this.keys.PageUp || this.keys.KeyE || this.keys.KeyR;
-          const down = this.keys.ShiftLeft || this.keys.ShiftRight || this.keys.ArrowDown || this.keys.PageDown || this.keys.KeyQ || this.keys.KeyF;
+          const up = this.keys.ArrowUp || this.keys.PageUp || this.keys.KeyR;
+          const down = this.keys.ShiftLeft || this.keys.ShiftRight || this.keys.ArrowDown || this.keys.PageDown || this.keys.KeyF;
           const direction = (up ? 1 : 0) - (down ? 1 : 0);
-          this.el.object3D.position.y += direction * this.data.speed * delta / 1000;
+          if (!direction) return;
+
+          const nextY = this.el.object3D.position.y + direction * this.data.speed * delta / 1000;
+          if (!this.outerBounds) {
+            this.el.object3D.position.y = nextY;
+            return;
+          }
+
+          const radius = 0.5;
+          const minY = this.outerBounds.min.y + radius;
+          const maxY = this.outerBounds.max.y - radius;
+          if (nextY < minY || nextY > maxY) return;
+
+          this.el.object3D.position.y = nextY;
+        },
+        remove: function () {
+          window.removeEventListener('keydown', this.onKeyDown);
+          window.removeEventListener('keyup', this.onKeyUp);
+        }
+      });
+
+      AFRAME.registerComponent('camera-relative-controls', {
+        schema: { speed: { default: 3.2 } },
+        init: function () {
+          this.keys = {};
+          this.onKeyDown = event => {
+            if (['KeyW', 'KeyS', 'KeyA', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.code)) {
+              event.preventDefault();
+              this.keys[event.code] = true;
+            }
+          };
+          this.onKeyUp = event => { this.keys[event.code] = false; };
+          window.addEventListener('keydown', this.onKeyDown);
+          window.addEventListener('keyup', this.onKeyUp);
+          this.lastPosition = this.el.object3D.position.clone();
+          this.outerBounds = null;
+          const hallway = document.getElementById('hallway');
+          if (hallway) {
+            hallway.addEventListener('model-loaded', () => {
+              const model = hallway.getObject3D('mesh');
+              if (!model) return;
+              model.updateMatrixWorld(true);
+              const bounds = new THREE.Box3().setFromObject(model);
+              this.outerBounds = bounds;
+            });
+          }
+        },
+        tick: function (time, delta) {
+          const camera = this.el.querySelector('[camera]');
+          if (!camera) return;
+
+          const camObj = camera.object3D;
+          const forward = new THREE.Vector3();
+          const right = new THREE.Vector3();
+          const up = new THREE.Vector3(0, 1, 0);
+
+          camObj.getWorldDirection(forward);
+          forward.y = 0;
+          forward.normalize();
+          right.crossVectors(forward, up).normalize();
+
+          const moveForward = (this.keys.KeyS || this.keys.ArrowDown ? 1 : 0) - (this.keys.KeyW || this.keys.ArrowUp ? 1 : 0);
+          const moveRight = (this.keys.KeyD || this.keys.ArrowRight ? 1 : 0) - (this.keys.KeyA || this.keys.ArrowLeft ? 1 : 0);
+
+          let speedScale = 1;
+          if (this.outerBounds) {
+            const y = this.el.object3D.position.y;
+            const minY = -9;
+            const maxY = 1;
+            const range = maxY - minY || 1;
+            const t = THREE.MathUtils.clamp((y - minY) / range, 0, 1);
+            speedScale = 0.5 + t * 1.5;
+          }
+
+          const speed = this.data.speed * speedScale * delta / 1000;
+          const offset = new THREE.Vector3();
+          offset.copy(forward).multiplyScalar(moveForward * speed);
+          offset.addScaledVector(right, moveRight * speed);
+
+          const next = this.el.object3D.position.clone().add(offset);
+          if (!this.outerBounds) {
+            this.el.object3D.position.copy(next);
+            return;
+          }
+
+          const radius = 0.5;
+          const minX = this.outerBounds.min.x + radius;
+          const maxX = this.outerBounds.max.x - radius;
+          const minY = this.outerBounds.min.y + radius;
+          const maxY = this.outerBounds.max.y - radius;
+          const minZ = this.outerBounds.min.z + radius;
+          const maxZ = this.outerBounds.max.z - radius;
+
+          if (next.x < minX || next.x > maxX) return;
+          if (next.y < minY || next.y > maxY) return;
+          if (next.z < minZ || next.z > maxZ) return;
+
+          this.el.object3D.position.copy(next);
         },
         remove: function () {
           window.removeEventListener('keydown', this.onKeyDown);
@@ -79,16 +187,30 @@
     </script>
   </head>
   <body>
-<a-scene>
-  <a-assets>
-    <a-asset-item id="tree" src="gaetanProject2.glb"></a-asset-item>
-  </a-assets>
+    <a-scene>
+      <a-assets>
+        <a-asset-item id="tree" src="gaetanProject2.glb"></a-asset-item>
+      </a-assets>
 
-  <a-entity id="hallway" gltf-model="#tree"></a-entity>
-  <a-entity id="player" position="0 1.6 0" wasd-controls vertical-controls mesh-collision="target: #hallway">
-    <a-entity camera position="0 0 0" look-controls></a-entity>
-  </a-entity>
-</a-scene>
+      <a-light type="point" color="#ffffff" intensity="2.2" distance="18" position="-0.15 -0.86 -6.50"></a-light>
+
+      <a-entity id="hallway" gltf-model="#tree"></a-entity>
+
+      <a-entity id="player" position="0 0.2 6" camera-relative-controls="speed: 0.7" vertical-controls="speed: 0.9">
+        <a-entity camera position="0 0 0" look-controls>
+          <a-light type="spot" color="#fff5db" intensity="3.2" angle="26" penumbra="0.9" distance="16" position="0 0 0" rotation="0 0 0"></a-light>
+        </a-entity>
+      </a-entity>
+    </a-scene>
+
+    <script>
+      const scene = document.querySelector('a-scene');
+      if (scene) {
+        scene.addEventListener('renderstart', () => {
+          // no coordinate HUD active
+        });
+      }
+    </script>
 
 </body>
 </html>
